@@ -4,7 +4,7 @@
 Runs from a systemd timer (see ../templates). Python standard library + commands already on the box.
 Tells, never listens, never takes an instruction: of the answer to its POST it reads the status only.
 Facts only: never an env value but the *_VERSION of an image, never a command line, a config dump or a
-file's content. A section that cannot be read says so in `errors`: unknown never reads as clean.
+file's content (of a certificate: its name, end date and fingerprint). A section that cannot be read says so in `errors`: unknown never reads as clean.
 
     guard_report.py           prints the report (a dry run: ssh host 'python3 -' < guard_report.py)
     guard_report.py --push    signs and sends it (GUARD_URL, GUARD_HOST, key in $CREDENTIALS_DIRECTORY)
@@ -20,13 +20,14 @@ import platform
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
-VERSION = 1
+VERSION = 2
 # a dry run over ssh is the plain user; the timer runs as root
 AS_ROOT = [] if os.geteuid() == 0 else ['sudo', '-n']
 # what the outside check knocks on: never an SSH port, a dropped connection can count as a failed login
@@ -39,12 +40,15 @@ QUIET_SOCKETS = ('systemd-network', 'chronyd', 'systemd-resolve')
 LOGIN_WINDOW = '7 days ago'
 ACCEPTED = re.compile(r'^(\S+) .*Accepted (\S+) for (\S+) from (\S+) port \d+ ssh2(?:: \S+ (\S+))?')
 FIREWALL_RULE = re.compile(r'^(.+?)\s{2,}(ALLOW|LIMIT)(?: IN| FWD)?\s+(.+?)(?:\s+#.*)?$')
+CERT_DIRECTIVE = re.compile(r'^\s*ssl_(certificate|client_certificate|trusted_certificate)\s+"?([^";\s]+)"?\s*;', re.M)
+PEM_CERTIFICATE = re.compile(r'-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----', re.S)
 
 
-def run(*cmd, root=False, timeout=60):
+def run(*cmd, root=False, timeout=60, stdin=None):
     """(exit code, stdout): commands that report by their exit code, or may rightly fail."""
     prefix = AS_ROOT if root else []
-    done = subprocess.run(prefix + list(cmd), capture_output=True, text=True, errors='replace', timeout=timeout)
+    done = subprocess.run(prefix + list(cmd), capture_output=True, text=True, errors='replace', timeout=timeout,
+                          input=stdin)
     return done.returncode, done.stdout
 
 
@@ -206,14 +210,42 @@ def services():
             'fail2ban': run('systemctl', 'is-active', 'fail2ban')[0] == 0}
 
 
+def nginx_files():
+    return ['/etc/nginx/nginx.conf'] + glob.glob('/etc/nginx/conf.d/*') + glob.glob('/etc/nginx/sites-enabled/*')
+
+
 def web():
     """The TLS versions nginx enables, read from its files: nginx -T would run a config test as root."""
-    paths = ['/etc/nginx/nginx.conf'] + glob.glob('/etc/nginx/conf.d/*') + glob.glob('/etc/nginx/sites-enabled/*')
     protocols = set()
-    for path in paths:
+    for path in nginx_files():
         for value in re.findall(r'^\s*ssl_protocols\s+([^;#]+);', read_root(path) or '', re.M):
             protocols.add(' '.join(value.split()))
     return {'old_tls': sorted(value for value in protocols if re.search(r'TLSv1(\.1)?(\s|$)', value))}
+
+
+def certificates():
+    """What nginx serves (server) or checks clients against (trust), with end dates. Only files it names."""
+    uses = {}
+    for path in nginx_files():
+        for directive, name in CERT_DIRECTIVE.findall(read_root(path) or ''):
+            uses.setdefault(name, 'server' if directive == 'certificate' else 'trust')
+    return [{'path': name[:120], 'use': use, 'certs': certificates_in(name)} for name, use in sorted(uses.items())][:40]
+
+
+def certificates_in(path):
+    """The file's certificates, in order. A key in the same file stays here: only CERTIFICATE blocks go to openssl."""
+    found = []
+    for block in PEM_CERTIFICATE.findall(read_root(path) or '')[:8]:
+        code, out = run('openssl', 'x509', '-noout', '-enddate', '-subject', '-fingerprint', '-sha256', stdin=block)
+        end = re.search(r'^notAfter=(.+)$', out, re.M)
+        if code != 0 or not end:
+            continue
+        name = re.search(r'^subject=.*?CN\s*=\s*([^,/\n]+)', out, re.M)
+        digest = re.search(r'^sha256 fingerprint=(\S+)$', out, re.M | re.I)
+        found.append({'cn': name[1].strip()[:60] if name else None,
+                      'until': time.strftime('%Y-%m-%d', time.gmtime(ssl.cert_time_to_seconds(end[1].strip()))),
+                      'sha256': digest[1].replace(':', '').lower() if digest else None})
+    return found
 
 
 def git_tokens():
@@ -293,7 +325,8 @@ def outside():
 
 
 SECTIONS = {'system': system, 'apt': apt_state, 'reboot': reboot, 'firewall': firewall, 'listening': listening,
-            'ssh': ssh, 'accounts': accounts, 'services': services, 'web': web, 'git_tokens': git_tokens,
+            'ssh': ssh, 'accounts': accounts, 'services': services, 'web': web, 'certificates': certificates,
+            'git_tokens': git_tokens,
             'docker': docker, 'outside': outside}
 
 

@@ -64,6 +64,58 @@ class ParsingTest(unittest.TestCase):
             self.assertEqual(guard.web(), {'old_tls': ['TLSv1 TLSv1.1 TLSv1.2']})
 
 
+class CertificatesTest(unittest.TestCase):
+    NGINX = '''
+    ssl_certificate "/etc/nginx/ssl/site.crt";
+    ssl_certificate_key "/etc/nginx/ssl/site.key";
+    ssl_client_certificate /etc/nginx/ssl/pull_ca.pem;
+    # ssl_certificate /etc/nginx/ssl/old.crt;
+    ssl_trusted_certificate /etc/nginx/ssl/gone.pem;
+    '''
+    PEM = '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n'
+    KEY = '-----BEGIN PRIVATE KEY-----\nhunter2\n-----END PRIVATE KEY-----\n'
+    OPENSSL = ('notAfter=Nov  1 17:00:00 2029 GMT\n'
+               'subject=C = US, O = "CloudFlare, Inc.", CN = origin-pull.cloudflare.net\n'
+               'sha256 Fingerprint=9A:1A:C2\n')
+
+    def read(self, path, limit=0):
+        files = {'/etc/nginx/nginx.conf': self.NGINX, '/etc/nginx/ssl/site.crt': self.KEY + self.PEM + self.PEM,
+                 '/etc/nginx/ssl/pull_ca.pem': self.PEM}
+        return files.get(path)
+
+    def facts(self):
+        with mock.patch.object(guard.glob, 'glob', return_value=[]), \
+             mock.patch.object(guard, 'read_root', side_effect=self.read), \
+             mock.patch.object(guard, 'run', return_value=(0, self.OPENSSL)) as openssl:
+            return guard.certificates(), openssl
+
+    def test_each_file_nginx_names_once_with_its_use_and_never_a_commented_one(self):
+        facts, _ = self.facts()
+        self.assertEqual([(item['path'], item['use']) for item in facts],
+                         [('/etc/nginx/ssl/gone.pem', 'trust'), ('/etc/nginx/ssl/pull_ca.pem', 'trust'),
+                          ('/etc/nginx/ssl/site.crt', 'server')])
+
+    def test_the_facts_of_a_certificate(self):
+        facts, _ = self.facts()
+        self.assertEqual(facts[1]['certs'],
+                         [{'cn': 'origin-pull.cloudflare.net', 'until': '2029-11-01', 'sha256': '9a1ac2'}])
+
+    def test_every_certificate_of_a_file_counts_and_a_missing_file_says_none(self):
+        facts, _ = self.facts()
+        self.assertEqual(len(facts[2]['certs']), 2)
+        self.assertEqual(facts[0]['certs'], [])
+
+    def test_a_key_in_the_same_file_never_reaches_openssl_or_the_report(self):
+        facts, openssl = self.facts()
+        self.assertNotIn('hunter2', json.dumps(facts))
+        self.assertTrue(all('hunter2' not in call.kwargs['stdin'] for call in openssl.call_args_list))
+
+    def test_a_block_openssl_refuses_is_left_out(self):
+        with mock.patch.object(guard, 'read_root', return_value=self.PEM), \
+             mock.patch.object(guard, 'run', return_value=(1, '')):
+            self.assertEqual(guard.certificates_in('/x'), [])
+
+
 class NothingSecretLeavesTest(unittest.TestCase):
     def container(self):
         return {'Name': '/app', 'Image': 'sha256:1', 'Config': {'Image': 'x:1', 'Env': ['DATABASE_PASSWORD=hunter2'], 'Cmd': ['--token=hunter2']},
