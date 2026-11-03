@@ -53,8 +53,8 @@ IP. Same rule if erinye-3 moves: the DNS part of the light turns grey after 3 da
 ## Netdata and Docker
 `netdata_no_docker.yml` takes Netdata out of the `docker` group, which equals root, and restarts it where
 the group was removed. No vault. Netdata's installer adds the group back: rerun after any Netdata reinstall.
-Container charts are then named after the container's ID, and tipis-web's monitoring page finds them from
-the container's hostname.
+Container charts are then named after the container's ID and start empty at every deploy, so tipis-web's
+monitoring page reads per-process charts (`app.*`), never a `cgroup_*` one.
 
 ## Tests
     python3 -m unittest discover tests

@@ -1,6 +1,6 @@
 # Takes Netdata out of the docker group: that group equals root, so a flaw in Netdata would be root on
 # the server. Nothing needs it: without Docker, Netdata names a container's charts after its ID, and the
-# monitoring page finds them from the container's hostname. Restarts Netdata where the group was removed.
+# monitoring page reads per-process charts instead. Restarts Netdata where the group was removed.
 # Netdata's installer adds the group back: rerun this after any Netdata reinstall. Safe to rerun.
 #
 #   ansible-playbook netdata_no_docker.yml --limit tipis-autocomplete-1 --check --diff
