@@ -1,0 +1,28 @@
+# Takes Netdata out of the docker group: that group equals root, so a flaw in Netdata would be root on
+# the server. Nothing needs it: without Docker, Netdata names a container's charts after its ID, and the
+# monitoring page finds them from the container's hostname. Restarts Netdata where the group was removed.
+# Netdata's installer adds the group back: rerun this after any Netdata reinstall. Safe to rerun.
+#
+#   ansible-playbook netdata_no_docker.yml --limit tipis-autocomplete-1 --check --diff
+#   ansible-playbook netdata_no_docker.yml --limit tipis-autocomplete-1
+- hosts: fleet
+  gather_facts: false
+  tasks:
+    - name: Read Netdata's groups
+      ansible.builtin.command: id -nG netdata
+      register: netdata_groups
+      changed_when: false
+      check_mode: false
+
+    - name: Remove the docker group, keep the others
+      ansible.builtin.user:
+        name: netdata
+        groups: "{{ netdata_groups.stdout.split() | reject('in', ['netdata', 'docker']) | list }}"
+        append: false
+      notify: Restart Netdata
+
+  handlers:
+    - name: Restart Netdata
+      ansible.builtin.systemd:
+        name: netdata
+        state: restarted

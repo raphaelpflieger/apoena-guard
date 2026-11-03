@@ -50,5 +50,11 @@ create a new token (`/vps`, `/vps/*`, `/dedicated/server`, `/dedicated/server/*`
 `cloudflare_dns_token` in production credentials: Zone DNS Read on all zones, restricted to erinye-3's
 IP. Same rule if erinye-3 moves: the DNS part of the light turns grey after 3 days.
 
+## Netdata and Docker
+`netdata_no_docker.yml` takes Netdata out of the `docker` group, which equals root, and restarts it where
+the group was removed. No vault. Netdata's installer adds the group back: rerun after any Netdata reinstall.
+Container charts are then named after the container's ID, and tipis-web's monitoring page finds them from
+the container's hostname.
+
 ## Tests
     python3 -m unittest discover tests
