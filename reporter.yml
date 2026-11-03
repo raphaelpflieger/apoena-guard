@@ -1,0 +1,89 @@
+# Installs the guard reporter: one script, one key, a systemd service and timer. No apt, no checkout, no
+# GitHub token on the servers, no other change. Safe to rerun; no tags on purpose, there is only this.
+#
+#   ansible-playbook reporter.yml --ask-vault-pass --limit venus-2 --check --diff
+#   ansible-playbook reporter.yml --ask-vault-pass --limit venus-2
+#
+# Remove from a server: ansible-playbook reporter.yml --ask-vault-pass --limit <host> -e guard_state=absent
+- hosts: fleet
+  gather_facts: false
+  vars_files:
+    - ansible_secrets.yml
+  vars:
+    guard_state: present
+    guard_key: "{{ (guard_report_secret ~ inventory_hostname) | hash('sha256') }}"
+    guard_scout: "{{ guard_scouts[inventory_hostname] | default('') }}"
+  tasks:
+    - name: Script
+      ansible.builtin.copy:
+        src: files/guard_report.py
+        dest: /usr/local/sbin/guard-report
+        owner: root
+        group: root
+        mode: "0700"
+      when: guard_state == 'present'
+
+    - name: Key directory
+      ansible.builtin.file:
+        path: /etc/apoena-guard
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when: guard_state == 'present'
+
+    - name: This server's key
+      ansible.builtin.copy:
+        content: "{{ guard_key }}\n"
+        dest: /etc/apoena-guard/key
+        owner: root
+        group: root
+        mode: "0400"
+      no_log: true
+      diff: false
+      when: guard_state == 'present'
+
+    - name: Service and timer
+      ansible.builtin.template:
+        src: "templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - guard-report.service
+        - guard-report.timer
+      when: guard_state == 'present'
+
+    - name: Timer on
+      ansible.builtin.systemd_service:
+        name: guard-report.timer
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: guard_state == 'present' and not ansible_check_mode
+
+    - name: First report now, so a failure shows here and not in six hours
+      ansible.builtin.systemd_service:
+        name: guard-report.service
+        state: started
+      when: guard_state == 'present' and not ansible_check_mode
+
+    - name: Timer off
+      ansible.builtin.systemd_service:
+        name: guard-report.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+      when: guard_state == 'absent'
+
+    - name: Files gone
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/guard-report.timer
+        - /etc/systemd/system/guard-report.service
+        - /etc/apoena-guard
+        - /usr/local/sbin/guard-report
+      when: guard_state == 'absent'

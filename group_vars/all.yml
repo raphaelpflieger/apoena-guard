@@ -1,0 +1,21 @@
+# Where the reports go (tipis-web, FleetReportsController).
+guard_url: https://www.lacartedescolocs.fr/fleet_reports
+
+# The outside check: each of these knocks on the others (a fixed list of ports, never SSH) and reports
+# what answered. neptune-2 sees the whole fleet, in IPv4 and IPv6; it is allowlisted nowhere. A proxy looks
+# at neptune-2 in return. The proxies have no IPv6.
+guard_scouts:
+  neptune-2: >-
+    erinye-3=37.187.252.180 erinye-3=2001:41d0:c:4b4::
+    tipis-db-1=37.187.252.143 tipis-db-1=2001:41d0:c:48f::
+    venus-2=51.210.105.166 venus-2=2001:41d0:304:200::1466
+    athena-2=162.19.24.164 athena-2=2001:41d0:304:200::30c4
+    hermes-2=152.228.174.218 hermes-2=2001:41d0:304:200::a903
+    tipis-autocomplete-1=51.254.132.214 tipis-autocomplete-2=79.137.78.219
+    tipis-autocomplete-3=79.137.79.51 tipis-autocomplete-4=79.137.79.147
+    tipis-autocomplete-5=79.137.79.192 tipis-autocomplete-6=213.32.64.47
+    tipis-autocomplete-7=213.32.64.120 tipis-autocomplete-8=213.32.64.188
+    tipis-autocomplete-9=213.32.65.11 tipis-autocomplete-10=213.32.65.12
+    apoena-proxies-11=213.32.65.20 apoena-proxies-12=213.32.65.42
+    apoena-proxies-13=145.239.72.26 apoena-proxies-14=51.83.33.23
+  apoena-proxies-14: neptune-2=141.95.98.192

@@ -1,0 +1,12 @@
+# Every 6 hours and 5 minutes after boot, spread so 20 servers never push at once.
+[Unit]
+Description=Apoena guard: report every 6 hours
+
+[Timer]
+OnCalendar=00/6:00
+OnBootSec=5min
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

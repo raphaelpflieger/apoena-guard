@@ -1,0 +1,33 @@
+# Apoena guard: this server's security facts, pushed to tipis-web. Managed by ~/apoena-guard.
+# Root, because the facts need it (ufw, ss, authorized_keys). Reaching the Docker socket makes it
+# root-equivalent anyway: this sandbox guards against accidents, it adds nothing against an attacker who
+# already has root. Listens on nothing, takes no input, reads only the status of its POST.
+[Unit]
+Description=Apoena guard: report this server's security facts
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/guard-report --push
+Environment=GUARD_HOST={{ inventory_hostname }}
+Environment=GUARD_URL={{ guard_url }}
+{% if guard_scout %}
+Environment="GUARD_SCOUT={{ guard_scout }}"
+{% endif %}
+LoadCredential=key:/etc/apoena-guard/key
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=512M
+TimeoutStartSec=400
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=-/run/ufw.lock -/run/xtables.lock -/run/needrestart
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SyslogIdentifier=guard-report

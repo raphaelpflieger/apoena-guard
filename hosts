@@ -1,0 +1,28 @@
+# The fleet, once: tipis-web's Monitoring::Fleet::MACHINES holds the same names (a server missing from
+# either side shows by itself: silent = grey in the panel; unknown = refused when it pushes).
+[fleet]
+erinye-3 ansible_host=37.187.252.180 ansible_port=24751
+tipis-db-1 ansible_host=37.187.252.143 ansible_port=47351
+venus-2 ansible_host=51.210.105.166 ansible_port=34127
+neptune-2 ansible_host=141.95.98.192 ansible_port=61986
+athena-2 ansible_host=162.19.24.164 ansible_port=37125
+hermes-2 ansible_host=152.228.174.218 ansible_port=47333
+tipis-autocomplete-1 ansible_host=51.254.132.214 ansible_port=61986
+tipis-autocomplete-2 ansible_host=79.137.78.219 ansible_port=61986
+tipis-autocomplete-3 ansible_host=79.137.79.51 ansible_port=61986
+tipis-autocomplete-4 ansible_host=79.137.79.147 ansible_port=61986
+tipis-autocomplete-5 ansible_host=79.137.79.192 ansible_port=61986
+tipis-autocomplete-6 ansible_host=213.32.64.47 ansible_port=61986
+tipis-autocomplete-7 ansible_host=213.32.64.120 ansible_port=61986
+tipis-autocomplete-8 ansible_host=213.32.64.188 ansible_port=61986
+tipis-autocomplete-9 ansible_host=213.32.65.11 ansible_port=61986
+tipis-autocomplete-10 ansible_host=213.32.65.12 ansible_port=61986
+apoena-proxies-11 ansible_host=213.32.65.20 ansible_port=61986
+apoena-proxies-12 ansible_host=213.32.65.42 ansible_port=61986
+apoena-proxies-13 ansible_host=145.239.72.26 ansible_port=61986
+apoena-proxies-14 ansible_host=51.83.33.23 ansible_port=61986
+
+[fleet:vars]
+ansible_user=ubuntu
+ansible_become=true
+ansible_ssh_private_key_file=~/.ssh/apoena_ansible_ed25519
