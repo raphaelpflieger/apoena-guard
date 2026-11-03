@@ -46,5 +46,9 @@ and the OVH part of the light turns grey after 3 days: update the restriction in
 create a new token (`/vps`, `/vps/*`, `/dedicated/server`, `/dedicated/server/*`, `/hosting/privateDatabase`,
 `/hosting/privateDatabase/*`, GET only).
 
+## The Cloudflare token of the light (tipis-web, not here)
+`cloudflare_dns_token` in production credentials: Zone DNS Read on all zones, restricted to erinye-3's
+IP. Same rule if erinye-3 moves: the DNS part of the light turns grey after 3 days.
+
 ## Tests
     python3 -m unittest discover tests
