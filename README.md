@@ -8,8 +8,13 @@ live in tipis-web; this repo only puts the script on the servers. Runbook of the
 ## The reporter
 `files/guard_report.py`: Python standard library plus commands already on the box. Every 6 hours and at
 boot it reads this server's security facts and POSTs them, signed with the machine's own key. It listens
-on nothing, takes no input and reads only the status of its POST. No env value but an image's
-`*_VERSION`, no command line, no config dump, no file content.
+on nothing and reads only the status of its requests. No env value but an image's `*_VERSION`, no command
+line, no config dump, no file content.
+
+Every 2 minutes `guard-report-asked.timer` makes one signed `GET`: has an admin pressed the refresh button of
+tipis-web's status bar since this server last reported? 200 = report now, anything else or no answer = nothing.
+That is the one bit a server takes from outside, and the worst a forged yes can do is one more report. Hence no
+port, no key on the app's side, no way in. The app needs the `GET` route first; before it, a server just hears 404.
 
 ## Secret
 `ansible_secrets.yml`, a vault holding one variable, `guard_report_secret`. The same value sits in

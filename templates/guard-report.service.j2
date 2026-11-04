@@ -1,7 +1,7 @@
 # Apoena guard: this server's security facts, pushed to tipis-web. Managed by ~/apoena-guard.
 # Root, because the facts need it (ufw, ss, authorized_keys). Reaching the Docker socket makes it
 # root-equivalent anyway: this sandbox guards against accidents, it adds nothing against an attacker who
-# already has root. Listens on nothing, takes no input, reads only the status of its POST.
+# already has root. Listens on nothing; of the answers to its requests it reads the status only.
 [Unit]
 Description=Apoena guard: report this server's security facts
 After=network-online.target docker.service
@@ -9,7 +9,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/guard-report --push
+ExecStart=/usr/local/sbin/guard-report --push{{ guard_args | default('') }}
 Environment=GUARD_HOST={{ inventory_hostname }}
 Environment=GUARD_URL={{ guard_url }}
 {% if guard_scout %}

@@ -1,4 +1,5 @@
-# Installs the guard reporter: one script, one key, a systemd service and timer. No apt, no checkout, no
+# Installs the guard reporter: one script, one key, a systemd service and its two timers (every 6 h; every
+# 2 min, a look: did an admin press the refresh button?). No apt, no checkout, no
 # GitHub token on the servers, no other change. Safe to rerun; no tags on purpose, there is only this.
 #
 #   ansible-playbook reporter.yml --ask-vault-pass --limit venus-2 --check --diff
@@ -53,14 +54,29 @@
       loop:
         - guard-report.service
         - guard-report.timer
+        - guard-report-asked.timer
       when: guard_state == 'present'
 
-    - name: Timer on
+    - name: The same service, when the status bar's refresh button asks
+      ansible.builtin.template:
+        src: templates/guard-report.service.j2
+        dest: /etc/systemd/system/guard-report-asked.service
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        guard_args: " --if-asked"
+      when: guard_state == 'present'
+
+    - name: Timers on
       ansible.builtin.systemd_service:
-        name: guard-report.timer
+        name: "{{ item }}"
         state: started
         enabled: true
         daemon_reload: true
+      loop:
+        - guard-report.timer
+        - guard-report-asked.timer
       when: guard_state == 'present' and not ansible_check_mode
 
     - name: First report now, so a failure shows here and not in six hours
@@ -69,12 +85,15 @@
         state: started
       when: guard_state == 'present' and not ansible_check_mode
 
-    - name: Timer off
+    - name: Timers off
       ansible.builtin.systemd_service:
-        name: guard-report.timer
+        name: "{{ item }}"
         state: stopped
         enabled: false
       failed_when: false
+      loop:
+        - guard-report.timer
+        - guard-report-asked.timer
       when: guard_state == 'absent'
 
     - name: Files gone
@@ -84,6 +103,8 @@
       loop:
         - /etc/systemd/system/guard-report.timer
         - /etc/systemd/system/guard-report.service
+        - /etc/systemd/system/guard-report-asked.timer
+        - /etc/systemd/system/guard-report-asked.service
         - /etc/apoena-guard
         - /usr/local/sbin/guard-report
       when: guard_state == 'absent'

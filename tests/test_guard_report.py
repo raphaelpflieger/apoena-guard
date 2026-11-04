@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import tempfile
 import unittest
 from unittest import mock
 
@@ -160,6 +161,50 @@ class ReportTest(unittest.TestCase):
     def test_the_signature_is_what_tipis_web_checks(self):
         self.assertEqual(guard.signature('k', '100', b'{}'),
                          __import__('hmac').new(b'k', b'100.{}', 'sha256').hexdigest())
+
+    def looking(self, status=None, error=None):
+        answer = mock.MagicMock(status=status)
+        answer.__enter__.return_value = answer
+        with tempfile.TemporaryDirectory() as folder:
+            pathlib.Path(folder, 'key').write_text('k\n')
+            env = {'CREDENTIALS_DIRECTORY': folder, 'GUARD_URL': 'https://x/fleet_reports', 'GUARD_HOST': 'venus-2'}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(guard.urllib.request, 'urlopen', return_value=answer, side_effect=error) as opened:
+                return guard.asked(), opened
+
+    def test_only_a_200_means_asked(self):
+        self.assertTrue(self.looking(status=200)[0])
+        self.assertFalse(self.looking(status=204)[0])
+        self.assertFalse(self.looking(error=guard.urllib.error.URLError('down'))[0])
+        self.assertFalse(self.looking(error=OSError('reset'))[0])
+
+    def test_the_question_is_a_signed_get_with_an_empty_body(self):
+        request = self.looking(status=204)[1].call_args.args[0]
+        self.assertEqual('GET', request.get_method())
+        self.assertIsNone(request.data)
+        self.assertEqual('venus-2', request.get_header('X-guard-host'))
+        timestamp = request.get_header('X-guard-timestamp')
+        self.assertEqual(guard.signature('k', timestamp, b''), request.get_header('X-guard-signature'))
+
+    def test_not_asked_means_no_report_at_all_and_a_clean_exit(self):
+        with mock.patch.object(guard, 'asked', return_value=False), mock.patch.object(guard, 'report') as report, \
+             mock.patch.object(guard.sys, 'argv', ['guard-report', '--if-asked', '--push']):
+            self.assertEqual(0, guard.main())
+        report.assert_not_called()
+
+    def test_asked_reports_and_pushes(self):
+        with mock.patch.object(guard, 'asked', return_value=True), mock.patch.object(guard, 'report', return_value={}), \
+             mock.patch.object(guard, 'push', return_value=True) as pushed, \
+             mock.patch.object(guard.sys, 'argv', ['guard-report', '--if-asked', '--push']):
+            self.assertEqual(0, guard.main())
+        pushed.assert_called_once()
+
+    def test_the_timer_alone_never_looks(self):
+        with mock.patch.object(guard, 'asked') as looked, mock.patch.object(guard, 'report', return_value={}), \
+             mock.patch.object(guard, 'push', return_value=True), \
+             mock.patch.object(guard.sys, 'argv', ['guard-report', '--push']):
+            self.assertEqual(0, guard.main())
+        looked.assert_not_called()
 
     def test_an_outside_check_only_runs_where_asked(self):
         with mock.patch.dict(os.environ, {}, clear=True):

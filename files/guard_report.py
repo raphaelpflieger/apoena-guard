@@ -1,12 +1,14 @@
 #!/usr/bin/python3
 """Apoena guard reporter: this server's security facts, for the « sécurité » light of tipis-web.
 
-Runs from a systemd timer (see ../templates). Python standard library + commands already on the box.
-Tells, never listens, never takes an instruction: of the answer to its POST it reads the status only.
+Runs from two systemd timers (see ../templates). Python standard library + commands already on the box.
+Tells, never listens. One question, every 2 minutes: did an admin press the status bar's refresh? Of every
+answer it reads the status only.
 Facts only: never an env value but the *_VERSION of an image, never a command line, a config dump or a
 file's content (of a certificate: its name, end date and fingerprint). A section that cannot be read says so in `errors`: unknown never reads as clean.
 
     guard_report.py           prints the report (a dry run: ssh host 'python3 -' < guard_report.py)
+    guard_report.py --if-asked --push    looks first: sends only if an admin pressed the refresh button
     guard_report.py --push    signs and sends it (GUARD_URL, GUARD_HOST, key in $CREDENTIALS_DIRECTORY)
 """
 import collections
@@ -345,9 +347,28 @@ def signature(key, timestamp, body):
     return hmac.new(key.encode(), f'{timestamp}.'.encode() + body, hashlib.sha256).hexdigest()
 
 
-def push(facts, attempts=3):
+def machine_key():
     with open(os.path.join(os.environ['CREDENTIALS_DIRECTORY'], 'key')) as handle:
-        key = handle.read().strip()
+        return handle.read().strip()
+
+
+def asked():
+    """Did an admin press the status bar's refresh since this server last reported? The status is the whole
+    answer: 200 yes, anything else or no answer at all means no. The worst a forged yes can do is one report."""
+    timestamp = str(int(time.time()))
+    host = os.environ.get('GUARD_HOST') or socket.gethostname()
+    request = urllib.request.Request(os.environ['GUARD_URL'], method='GET', headers={
+        'User-Agent': f'apoena-guard/{VERSION}', 'X-Guard-Host': host, 'X-Guard-Timestamp': timestamp,
+        'X-Guard-Signature': signature(machine_key(), timestamp, b'')})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as answer:
+            return answer.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def push(facts, attempts=3):
+    key = machine_key()
     body = json.dumps(facts, ensure_ascii=False, separators=(',', ':')).encode()
     for attempt in range(attempts):
         timestamp = str(int(time.time()))
@@ -366,6 +387,8 @@ def push(facts, attempts=3):
 
 
 def main():
+    if '--if-asked' in sys.argv and not asked():
+        return 0
     facts = report()
     if '--push' not in sys.argv:
         print(json.dumps(facts, ensure_ascii=False))

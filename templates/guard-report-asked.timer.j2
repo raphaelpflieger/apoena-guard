@@ -1,0 +1,13 @@
+# Every 2 minutes, one signed question: has an admin pressed the status bar's refresh since the last report?
+# Only the status of the answer is read. Counted from the end of the last run, so a run never overlaps itself.
+[Unit]
+Description=Apoena guard: asked to report?
+
+[Timer]
+OnBootSec=7min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=20s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
