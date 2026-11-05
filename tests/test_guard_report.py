@@ -140,6 +140,21 @@ class NothingSecretLeavesTest(unittest.TestCase):
         privileged = {**self.container(), 'HostConfig': {'Privileged': True}}
         self.assertTrue(guard.container_facts(privileged, self.image())['root_power'])
 
+    # 2026-11-05 on venus-2: a build moved a tag, and the section went unreadable for all 4 containers.
+    def test_a_running_container_whose_image_is_gone_leaves_the_others_readable(self):
+        kept = {**self.container(), 'Name': '/kept', 'Image': 'sha256:kept'}
+        gone = {**self.container(), 'Name': '/gone', 'Image': 'sha256:gone'}
+        answers = {'ps': 'a\nb\n', 'version': '29.9.3\n', 'inspect': json.dumps([kept, gone])}
+        partial = (1, json.dumps([{**self.image(), 'Id': 'sha256:kept'}]))
+        with mock.patch.object(guard.shutil, 'which', return_value='/usr/bin/docker'), \
+             mock.patch.object(guard, 'base_os', return_value=None), \
+             mock.patch.object(guard, 'sh', side_effect=lambda *cmd, **_: answers[cmd[1]]), \
+             mock.patch.object(guard, 'run', return_value=partial):
+            found = {item['name']: item for item in guard.docker()['containers']}
+        self.assertEqual(found['kept']['versions'], {'PG_VERSION': '18.6'})
+        self.assertEqual(found['gone']['versions'], {})
+        self.assertEqual(found['gone']['built'], '')
+
     def test_a_git_token_is_named_by_path_never_by_value(self):
         with mock.patch.object(guard, 'sh', return_value='/home/ubuntu/app/.git/config\n'), \
              mock.patch.object(guard, 'read_root', return_value='url = https://x:ghp_hunter2@github.com/a/b.git'):

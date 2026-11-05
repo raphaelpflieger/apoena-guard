@@ -278,10 +278,17 @@ def docker():
     if not ids:
         return {'version': version, 'containers': []}
     containers = json.loads(sh('docker', 'inspect', *ids, root=True))
-    images = {image['Id']: image for image in json.loads(
-        sh('docker', 'image', 'inspect', *sorted({container['Image'] for container in containers}), root=True))}
+    images = image_details({container['Image'] for container in containers})
     return {'version': version,
             'containers': [container_facts(container, images.get(container['Image'], {})) for container in containers]}
+
+
+def image_details(ids):
+    """What docker still knows of these images. One can be gone while its container runs: with the
+    containerd store, moving a tag deletes the old image at once, and `docker image inspect` then
+    exits 1 while still listing the others."""
+    _, out = run('docker', 'image', 'inspect', *sorted(ids), root=True)
+    return {image['Id']: image for image in json.loads(out or '[]')}
 
 
 def container_facts(container, image):
