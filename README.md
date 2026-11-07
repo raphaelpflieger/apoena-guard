@@ -9,7 +9,9 @@ live in tipis-web; this repo only puts the script on the servers. Runbook of the
 `files/guard_report.py`: Python standard library plus commands already on the box. Every 6 hours and at
 boot it reads this server's security facts and POSTs them, signed with the machine's own key. It listens
 on nothing and reads only the status of its requests. No env value but an image's `*_VERSION`, no command
-line, no config dump, no file content.
+line, no config dump, no file content. A scout (`guard_scouts`) also knocks on the other servers and sends
+what answered with the ports it knocked, so tipis-web can tell a blinded scout from closed doors.
+`VERSION` goes up with every change: tipis-web shows a server left on an older one (`REPORTER_VERSION`).
 
 Every 2 minutes `guard-report-asked.timer` makes one signed `GET`: has an admin pressed the refresh button of
 tipis-web's status bar since this server last reported? 200 = report now, anything else or no answer = nothing.

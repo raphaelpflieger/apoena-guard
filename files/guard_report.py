@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = 2
+VERSION = 3
 # a dry run over ssh is the plain user; the timer runs as root
 AS_ROOT = [] if os.geteuid() == 0 else ['sudo', '-n']
 # what the outside check knocks on: never an SSH port, a dropped connection can count as a failed login
@@ -37,8 +37,6 @@ OUTSIDE_PORTS = [21, 23, 25, 53, 80, 110, 111, 143, 179, 443, 445, 465, 587, 993
                  2376, 3000, 3128, 3300, 3301, 3306, 3333, 4369, 5000, 5050, 5432, 5601, 5900, 6379, 6380, 6381,
                  6432, 8000, 8065, 8080, 8081, 8085, 8123, 8200, 8220, 8443, 8765, 8888, 9000, 9090, 9100, 9187,
                  9200, 9222, 9300, 11211, 13423, 15672, 16452, 19999, 27017, 31648, 32154]
-LOOPBACK = ('127.', '[::1]', '[::ffff:127.')
-QUIET_SOCKETS = ('systemd-network', 'chronyd', 'systemd-resolve')
 LOGIN_WINDOW = '7 days ago'
 ACCEPTED = re.compile(r'^(\S+) .*Accepted (\S+) for (\S+) from (\S+) port \d+ ssh2(?:: \S+ (\S+))?')
 FIREWALL_RULE = re.compile(r'^(.+?)\s{2,}(ALLOW|LIMIT)(?: IN| FWD)?\s+(.+?)(?:\s+#.*)?$')
@@ -152,19 +150,6 @@ def firewall():
             filtered = sorted(set(re.findall(r'--(?:ctorigdstport|dport|dports) (\S+)', out)))
     return {'active': any(line == 'Status: active' for line in status),
             'deny_incoming': 'deny (incoming)' in default, 'allow': allow, 'docker_filtered_ports': filtered}
-
-
-def listening():
-    sockets = set()
-    for line in sh('ss', '-H', '-tulnp', root=True).splitlines():
-        fields = line.split()
-        if len(fields) < 5 or fields[4].startswith(LOOPBACK):
-            continue
-        process = re.search(r'\(\("([^"]+)"', line)
-        name = process[1] if process else '?'
-        if name not in QUIET_SOCKETS:
-            sockets.add(f'{fields[0]} {fields[4]} {name}')
-    return sorted(sockets)
 
 
 def homes():
@@ -330,10 +315,13 @@ def outside():
         for hit in pool.map(knock, jobs):
             if hit:
                 found.setdefault(hit[0], {}).setdefault(hit[1], []).append(hit[2])
-    return {'at': int(time.time()), 'servers': [name for name, _ in targets], 'open': found}
+    # the ports knocked travel with the result: tipis-web tells a machine that answered on none of
+    # the ports it should (an unreachable machine, a blinded scout) from a clean one
+    return {'at': int(time.time()), 'servers': [name for name, _ in targets], 'open': found,
+            'ports': OUTSIDE_PORTS}
 
 
-SECTIONS = {'system': system, 'apt': apt_state, 'reboot': reboot, 'firewall': firewall, 'listening': listening,
+SECTIONS = {'system': system, 'apt': apt_state, 'reboot': reboot, 'firewall': firewall,
             'ssh': ssh, 'accounts': accounts, 'services': services, 'web': web, 'certificates': certificates,
             'git_tokens': git_tokens,
             'docker': docker, 'outside': outside}

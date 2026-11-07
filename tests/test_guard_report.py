@@ -25,14 +25,6 @@ To                         Action      From
 Anywhere                   REJECT IN   92.4.87.225
 34127 (v6)                 ALLOW IN    Anywhere (v6)
 """
-SS = """tcp   LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))
-tcp   LISTEN 0 4096 127.0.0.1:8125 0.0.0.0:* users:(("netdata",pid=2,fd=3))
-tcp   LISTEN 0 4096 [::]:8220 [::]:* users:(("docker-proxy",pid=3,fd=3))
-udp   UNCONN 0 0 0.0.0.0:51820 0.0.0.0:*
-udp   UNCONN 0 0 51.210.105.166%ens3:68 0.0.0.0:* users:(("systemd-network",pid=4,fd=3))
-"""
-
-
 class ParsingTest(unittest.TestCase):
     def test_firewall_keeps_allow_rules_only_and_no_comment(self):
         with mock.patch.object(guard, 'sh', return_value=UFW), mock.patch.object(guard.shutil, 'which', return_value=None):
@@ -48,10 +40,6 @@ class ParsingTest(unittest.TestCase):
         open_door = UFW.replace('deny (incoming)', 'allow (incoming)')
         with mock.patch.object(guard, 'sh', return_value=open_door), mock.patch.object(guard.shutil, 'which', return_value=None):
             self.assertFalse(guard.firewall()['deny_incoming'])
-
-    def test_listening_drops_loopback_and_quiet_sockets(self):
-        with mock.patch.object(guard, 'sh', return_value=SS):
-            self.assertEqual(guard.listening(), ['tcp 0.0.0.0:22 sshd', 'tcp [::]:8220 docker-proxy', 'udp 0.0.0.0:51820 ?'])
 
     def test_logins_are_grouped_with_their_key(self):
         out = ('2026-11-03T02:00:35+0100 h sshd[1]: Accepted publickey for ubuntu from 82.67.205.71 port 5 ssh2: ED25519 SHA256:abc\n'
@@ -224,6 +212,27 @@ class ReportTest(unittest.TestCase):
     def test_an_outside_check_only_runs_where_asked(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(guard.outside())
+
+    def test_the_outside_check_names_what_answered_and_every_port_it_knocked(self):
+        class Socket:
+            def __init__(self, family):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def settimeout(self, seconds):
+                pass
+            def connect(self, target):
+                if target[1] != 443:
+                    raise OSError('refused')
+
+        with mock.patch.dict(os.environ, {'GUARD_SCOUT': 'erinye-3=192.0.2.1'}), \
+             mock.patch.object(guard.socket, 'socket', Socket):
+            facts = guard.outside()
+        self.assertEqual({'erinye-3': {'192.0.2.1': [443]}}, facts['open'])
+        self.assertEqual(['erinye-3'], facts['servers'])
+        self.assertEqual(guard.OUTSIDE_PORTS, facts['ports'])
 
 
 if __name__ == '__main__':
