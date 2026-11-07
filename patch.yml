@@ -77,11 +77,12 @@
         DEBIAN_FRONTEND: noninteractive
       register: upgrade
 
-    - name: What apt installed (--check, what it would install)
+    - name: What apt installed and removed (--check, what it would)
       ansible.builtin.debug:
         msg: >-
           {{ upgrade.stdout_lines | default([])
-             | select('match', '^(Inst|Setting up) ')
+             | select('match', '^(Inst|Setting up|Remv|Removing) ')
+             | map('regex_replace', '^(?:Remv|Removing) ([^ ]+).*$', 'REMOVED \1')
              | map('regex_replace', '^(?:Inst|Setting up) ([^ ]+)[^(]*[(]([^ )]+).*$', '\1 \2')
              | list }}
 
@@ -169,6 +170,8 @@
               docker ps -q | xargs -r docker inspect -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' |
                 awk '$2 == "always" { print substr($1, 2) }' | xargs -r docker stop
             executable: /bin/bash
+          register: stopped_databases
+          changed_when: stopped_databases.stdout | length > 0
           timeout: 1800
 
         - name: Reboot
