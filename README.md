@@ -1,9 +1,9 @@
 # apoena-guard
 
-Fleet-wide monitoring tools, deployed with one small playbook. Today: the reporter behind the
-« sécurité » light of tipis-web (`/admin_panel/monitoring_page`). The rules, the panel and the policy
-live in tipis-web; this repo only puts the script on the servers. Runbook of the light:
-`tipis-web/.claude/skills/deployment-ops/references/observability.md`.
+Fleet-wide tools, one small playbook each: the reporter behind the « sécurité » light of tipis-web
+(`/admin_panel/monitoring_page`), and the routine patching of every server (`patch.yml`). The rules, the
+panel and the policy live in tipis-web; the light says what is owed, this repo does it. Runbook of the
+light: `tipis-web/.claude/skills/deployment-ops/references/observability.md`.
 
 ## The reporter
 `files/guard_report.py`: Python standard library plus commands already on the box. Every 6 hours and at
@@ -42,6 +42,8 @@ Without touching a server's disk, from here: `ssh <host> 'python3 -' < files/gua
 2. Its reviewed firewall rules in tipis-web's `config/security_policy.yml`.
 3. Its addresses in `guard_scouts` (`group_vars/all.yml`).
 4. Run the playbook with `--limit`.
+5. For `patch.yml`: its place in `hosts` sets its turn; a reboot that takes a service down puts it in
+   `[patch_critical]`, a slow boot or a backup timer goes in `host_vars/<it>.yml`.
 
 ## Rotate the secret
 New value in the vault and in tipis-web's credentials, deploy tipis-web, rerun the playbook on all servers.
@@ -56,6 +58,34 @@ create a new token (`/vps`, `/vps/*`, `/dedicated/server`, `/dedicated/server/*`
 ## The Cloudflare token of the light (tipis-web, not here)
 `cloudflare_dns_token` in production credentials: Zone DNS Read on all zones, restricted to erinye-3's
 IP. Same rule if erinye-3 moves: the DNS part of the light turns grey after 3 days.
+
+## Patch the fleet
+`patch.yml`: apt dist-upgrade, then a reboot where the server asks for one (`/var/run/reboot-required`).
+Kernels, openssh and Docker never come through unattended-upgrades (`51-*-overrides`): this is their way in,
+when the light shows them. Each server's own repo keeps its `--tags os-upgrade` for building a server. No vault.
+
+    ansible-playbook patch.yml --limit apoena-proxies-14 --check   # what apt would install; nothing changes
+    ansible-playbook patch.yml --limit apoena-proxies-14            # one server
+    ansible-playbook patch.yml                                      # all but the critical ones, one by one
+    ansible-playbook patch.yml --limit tipis-db-1                   # a critical one: alone, its own window
+
+- One server at a time: the proxies, the autocomplete servers, hermes-2, athena-2, neptune-2 (the reverse of
+  `hosts`). The first failure stops the run; the servers after it are untouched.
+- Before a reboot: `sshd -t` and a new SSH connection (an openssh upgrade locked the fleet out on 2026-05-17),
+  no unit newly failed, no backup running (`patch_busy_units`), and the `restart: always` containers stopped
+  with their own signal (live-restore skips `docker stop` at shutdown). `unless-stopped` ones are left running:
+  stopped by hand, they would not come back.
+- After it: the newest kernel runs, the same containers run (none starting or unhealthy), no unit newly
+  failed, and a fresh report goes to the light.
+- Critical servers (`[patch_critical]` in `hosts`: erinye-3, tipis-db-1, venus-2) run only when alone in the
+  run, and ask before rebooting. For erinye-3 and tipis-db-1 (`patch_maintenance`), the play takes tipis-web's
+  deploy lock, turns `tipis-maintenance` on (nginx on erinye-3 boots with it), waits for
+  `127.0.0.1:8089/health/ready` = 200, turns it off, releases the lock. For tipis-db-1, Sidekiq waits too
+  (jobs stay in Redis; many are `retry: 0`), behind a 30-min timer on erinye-3 (`apoena-patch-sidekiq`) that
+  starts it again if the run dies: the status sweep is a Sidekiq job, and with it back a maintenance left on
+  turns the « rails » light red, which mails.
+- The maintenance page covers erinye-3's boot-to-ready minutes, not the minutes its nginx is down
+  (Cloudflare's own 52x page then).
 
 ## Netdata and Docker
 `netdata_no_docker.yml` takes Netdata out of the `docker` group, which equals root, and restarts it where

@@ -19,3 +19,12 @@ guard_scouts:
     apoena-proxies-11=213.32.65.20 apoena-proxies-12=213.32.65.42
     apoena-proxies-13=145.239.72.26 apoena-proxies-14=51.83.33.23
   apoena-proxies-14: neptune-2=141.95.98.192
+
+# patch.yml, per server in host_vars/ where it differs.
+patch_app_host: erinye-3                        # where tipis-maintenance and the deploy lock live
+patch_deploy_lock: /run/lock/tipis-deploy.lock  # the very directory tipis-web's deploy takes (app role)
+patch_maintenance: false                        # true: the site is down while this server reboots
+patch_quiet_sidekiq: false                      # true: Sidekiq on patch_app_host waits while it reboots
+patch_app_dir: /home/ubuntu/tipis-web           # the compose project on patch_app_host
+patch_busy_units: []                            # a reboot refuses while one of these runs
+patch_reboot_timeout: 600                       # seconds; a dedicated server needs more (POST + netboot)

@@ -1,0 +1,5 @@
+# patch.yml: the primary database; the site is down while it reboots.
+patch_maintenance: true
+patch_quiet_sidekiq: true
+patch_busy_units: [pgbackrest-diff.service, pgbackrest-full.service]
+patch_reboot_timeout: 1200

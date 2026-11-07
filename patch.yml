@@ -1,0 +1,272 @@
+# Routine patching of the fleet: apt dist-upgrade, then a reboot where the server asks for one
+# (/var/run/reboot-required: a new kernel, libc...). The « sécurité » light says when; this does it.
+# Kernels, openssh and Docker never come through unattended-upgrades (51-*-overrides): this is their way in.
+# Each repo's own `--tags os-upgrade` stays for building a server; this is the routine pass. No vault.
+#
+#   ansible-playbook patch.yml --limit apoena-proxies-14 --check   # what apt would install; nothing changes
+#   ansible-playbook patch.yml --limit apoena-proxies-14            # one server
+#   ansible-playbook patch.yml                                      # every server but the critical ones
+#   ansible-playbook patch.yml --limit erinye-3                     # a critical one: alone, in its own window
+#
+# Order: reverse_inventory over `hosts` = the proxies, the autocomplete servers, hermes-2, athena-2,
+# neptune-2, then the critical ones (venus-2, tipis-db-1, erinye-3): reordering `hosts` reorders this.
+# One server at a time; the first failure stops the run, the servers after it are left untouched.
+# A critical server (group patch_critical) runs only when it is the run's one server, and asks before
+# its reboot. While erinye-3 or tipis-db-1 reboots, the site shows tipis-web's maintenance page and no
+# deploy can start (the deploy's own lock); for tipis-db-1, Sidekiq waits behind a 30-min safety timer.
+- hosts: fleet
+  order: reverse_inventory
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  vars:
+    critical: "{{ inventory_hostname in groups['patch_critical'] }}"
+  tasks:
+    - name: A critical server runs alone, in its own window
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} left alone: critical, run it by itself with --limit {{ inventory_hostname }}"
+      when: critical and ansible_play_hosts_all | length != 1
+
+    - name: Skip it
+      ansible.builtin.meta: end_host
+      when: critical and ansible_play_hosts_all | length != 1
+
+    - name: The maintenance switch is off and would work
+      ansible.builtin.shell: tipis-maintenance status && tipis-maintenance test
+      delegate_to: "{{ patch_app_host }}"
+      register: maintenance_ready
+      changed_when: false
+      failed_when: maintenance_ready.rc != 0 or not maintenance_ready.stdout.startswith('OFF')
+      check_mode: false
+      when: patch_maintenance
+
+    - name: Kernel before
+      ansible.builtin.command: uname -r
+      register: kernel_before
+      changed_when: false
+      check_mode: false
+
+    - name: Running containers before (healthy or without a health check)
+      ansible.builtin.shell:
+        cmd: !unsafe |
+          command -v docker >/dev/null || exit 0
+          docker ps --format '{{.Names}} {{.Status}}' | grep -v -E '\((health: starting|unhealthy)\)' | cut -d' ' -f1 | sort
+        executable: /bin/bash
+      register: containers_before
+      changed_when: false
+      check_mode: false
+
+    - name: Failed units before (the reporter's own failed push aside)
+      ansible.builtin.shell:
+        cmd: systemctl --failed --no-legend --plain | awk '{print $1}' | grep -v '^guard-report' | sort || true
+        executable: /bin/bash
+      register: failed_before
+      changed_when: false
+      check_mode: false
+
+    # dist: a new kernel comes in through its meta package. Held packages stay held; a changed config
+    # file keeps ours (the module's default force-confdef,force-confold: squid.conf, 2026-11-05).
+    # needrestart restarts what it restarts in the nightly unattended run, no more.
+    - name: Upgrade
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+        lock_timeout: 900
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      register: upgrade
+
+    - name: What apt installed (--check, what it would install)
+      ansible.builtin.debug:
+        msg: >-
+          {{ upgrade.stdout_lines | default([])
+             | select('match', '^(Inst|Setting up) ')
+             | map('regex_replace', '^(?:Inst|Setting up) ([^ ]+)[^(]*[(]([^ )]+).*$', '\1 \2')
+             | list }}
+
+    # The 2026-05-17 lockout was an openssh upgrade: never reboot a server we may not get back into.
+    - name: sshd accepts its configuration
+      ansible.builtin.command: sshd -t
+      changed_when: false
+      check_mode: false
+
+    - name: Drop the open SSH connection
+      ansible.builtin.meta: reset_connection
+
+    - name: A new SSH connection opens
+      ansible.builtin.ping:
+
+    - name: No unit failed during the upgrade (needrestart restarts services)
+      ansible.builtin.shell:
+        cmd: systemctl --failed --no-legend --plain | awk '{print $1}' | grep -v '^guard-report' | sort || true
+        executable: /bin/bash
+      register: failed_after_upgrade
+      changed_when: false
+      check_mode: false
+      failed_when: failed_after_upgrade.stdout_lines | difference(failed_before.stdout_lines) | length > 0
+
+    - name: Does the server ask for a reboot?
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Reboot
+      when: reboot_required.stat.exists and not ansible_check_mode
+      block:
+        - name: Go? (a critical server)
+          ansible.builtin.pause:
+            prompt: >-
+              {{ inventory_hostname }} reboots now{{ ', the site shows the maintenance page until the app is ready'
+              if patch_maintenance else '' }}. Enter = go; Ctrl-C then A = stop here (packages stay
+              installed, the reboot stays owed)
+          when: critical
+
+        - name: No backup running (a reboot would cut it)
+          ansible.builtin.command: systemctl is-active {{ item }}
+          loop: "{{ patch_busy_units }}"
+          register: busy
+          changed_when: false
+          failed_when: busy.stdout in ['active', 'activating', 'deactivating', 'reloading']
+
+        - name: Take the deploy lock (no deploy while the site is away)
+          ansible.builtin.command: mkdir {{ patch_deploy_lock }}
+          delegate_to: "{{ patch_app_host }}"
+          register: deploy_lock
+          failed_when: deploy_lock.rc != 0
+          when: patch_maintenance
+
+        # Jobs wait in Redis instead of dying against a missing database (62 `retry: 0` lines in app/jobs).
+        # The status sweep is a Sidekiq job too: if this run dies, the timer starts Sidekiq again within
+        # 30 min, so the alerts come back without anyone.
+        - name: Sidekiq waits while the database reboots (back by itself within 30 min if this run dies)
+          ansible.builtin.shell:
+            cmd: |
+              systemctl stop apoena-patch-sidekiq.timer 2>/dev/null || true
+              systemctl reset-failed apoena-patch-sidekiq.service 2>/dev/null || true
+              systemd-run --on-active=30min --unit=apoena-patch-sidekiq \
+                --working-directory={{ patch_app_dir }} /usr/bin/docker compose start sidekiq
+              docker compose stop -t 60 sidekiq
+            chdir: "{{ patch_app_dir }}"
+            executable: /bin/bash
+          delegate_to: "{{ patch_app_host }}"
+          register: sidekiq_quiet
+          when: patch_quiet_sidekiq
+
+        - name: Site in maintenance (it survives erinye-3's own reboot, nginx boots with it)
+          ansible.builtin.command: tipis-maintenance on
+          delegate_to: "{{ patch_app_host }}"
+          when: patch_maintenance
+
+        # With live-restore, a reboot skips `docker stop`: the shutdown's SIGTERM sweep would reach the
+        # databases instead of their own stop signal and grace period. `always` brings them back at boot,
+        # stopped or not; `unless-stopped` ones are left running (stopped by hand, they would stay down).
+        # On tipis-db-1, tipis-postgres.service does the same at shutdown: harmless twice.
+        - name: Databases stopped cleanly first
+          ansible.builtin.shell:
+            cmd: !unsafe |
+              command -v docker >/dev/null || exit 0
+              docker ps -q | xargs -r docker inspect -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' |
+                awk '$2 == "always" { print substr($1, 2) }' | xargs -r docker stop
+            executable: /bin/bash
+          timeout: 1800
+
+        - name: Reboot
+          ansible.builtin.reboot:
+            reboot_timeout: "{{ patch_reboot_timeout }}"
+            msg: apoena-guard patch.yml
+
+        - name: Boot finished
+          ansible.builtin.command: systemctl is-system-running --wait
+          register: system_state
+          changed_when: false
+          failed_when: false
+          timeout: 600
+
+        - name: Running the newest kernel installed
+          ansible.builtin.shell:
+            cmd: echo "$(uname -r) $(ls /boot/vmlinuz-* | sed 's#.*/vmlinuz-##' | sort -V | tail -1)"
+            executable: /bin/bash
+          register: kernels
+          changed_when: false
+          failed_when: kernels.stdout.split() | unique | length != 1
+
+        - name: The same containers run again, none starting or unhealthy
+          ansible.builtin.shell:
+            cmd: !unsafe |
+              command -v docker >/dev/null || exit 0
+              docker ps --format '{{.Names}} {{.Status}}' | grep -v -E '\((health: starting|unhealthy)\)' | cut -d' ' -f1 | sort
+            executable: /bin/bash
+          register: containers_after
+          changed_when: false
+          until: containers_before.stdout_lines | difference(containers_after.stdout_lines) | length == 0
+          retries: 40
+          delay: 15
+
+        - name: No unit failed that was fine before
+          ansible.builtin.shell:
+            cmd: systemctl --failed --no-legend --plain | awk '{print $1}' | grep -v '^guard-report' | sort || true
+            executable: /bin/bash
+          register: failed_after
+          changed_when: false
+          failed_when: failed_after.stdout_lines | difference(failed_before.stdout_lines) | length > 0
+
+        - name: The app is ready again (database and both Redis)
+          ansible.builtin.command: curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8089/health/ready
+          delegate_to: "{{ patch_app_host }}"
+          register: app_ready
+          changed_when: false
+          until: app_ready.stdout == '200'
+          retries: 90
+          delay: 10
+          when: patch_maintenance
+
+        - name: Sidekiq back
+          ansible.builtin.shell:
+            cmd: |
+              docker compose start sidekiq
+              systemctl stop apoena-patch-sidekiq.timer 2>/dev/null || true
+            chdir: "{{ patch_app_dir }}"
+            executable: /bin/bash
+          delegate_to: "{{ patch_app_host }}"
+          when: patch_quiet_sidekiq
+
+        - name: Site out of maintenance (drops the 5xx nginx cached meanwhile)
+          ansible.builtin.command: tipis-maintenance off
+          delegate_to: "{{ patch_app_host }}"
+          when: patch_maintenance
+
+      rescue:
+        - name: Stopped here
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: the reboot step failed at « {{ ansible_failed_task.name }} ». Look before
+              anything else.{{ ' Maintenance may still be ON: once /health/ready answers 200 on '
+              ~ patch_app_host ~ ', sudo tipis-maintenance off (the « rails » light is red meanwhile and alerts).'
+              if patch_maintenance else '' }}{{ ' Sidekiq may be stopped on ' ~ patch_app_host ~ ': it starts by'
+              ~ ' itself within 30 min of the stop (apoena-patch-sidekiq.timer), or now: cd ' ~ patch_app_dir
+              ~ ' && sudo docker compose start sidekiq.' if sidekiq_quiet is defined and sidekiq_quiet is not skipped
+              else '' }}
+
+      always:
+        - name: Release the deploy lock
+          ansible.builtin.file:
+            path: "{{ patch_deploy_lock }}"
+            state: absent
+          delegate_to: "{{ patch_app_host }}"
+          when: deploy_lock is defined and deploy_lock is not skipped and deploy_lock is succeeded
+
+    - name: Fresh report to the « sécurité » light
+      ansible.builtin.command: systemctl start --no-block guard-report.service
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: kernel {{ kernel_before.stdout }}
+          {%- if ansible_check_mode %}; reboot owed now: {{ reboot_required.stat.exists | ternary('yes', 'no') }}
+          (a linux-image in the list above means one after the real run)
+          {%- elif reboot_required.stat.exists %} → {{ kernels.stdout.split()[0] }}, rebooted
+          {%- else %}, no reboot needed{% endif %}

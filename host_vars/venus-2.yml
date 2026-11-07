@@ -1,0 +1,2 @@
+# patch.yml: the metrics database backs up with pgBackRest too.
+patch_busy_units: [pgbackrest-diff.service, pgbackrest-full.service]

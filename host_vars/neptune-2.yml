@@ -1,0 +1,2 @@
+# patch.yml: a dedicated server (tipis-maps), slow to boot.
+patch_reboot_timeout: 1200

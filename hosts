@@ -22,6 +22,13 @@ apoena-proxies-12 ansible_host=213.32.65.42 ansible_port=61986
 apoena-proxies-13 ansible_host=145.239.72.26 ansible_port=61986
 apoena-proxies-14 ansible_host=51.83.33.23 ansible_port=61986
 
+# patch.yml: these three reboot only alone (--limit <one of them>), in their own window: erinye-3 and
+# tipis-db-1 take the site down, venus-2 the image resizer, the antivirus and the metrics.
+[patch_critical]
+erinye-3
+tipis-db-1
+venus-2
+
 [fleet:vars]
 ansible_user=ubuntu
 ansible_become=true
